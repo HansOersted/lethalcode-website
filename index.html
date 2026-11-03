@@ -152,6 +152,10 @@ body.on-contact .bottom-marker,body.on-contact .scroll-cue{opacity:0;pointer-eve
    linear-gradient(0deg,rgba(2,4,7,.86),transparent 29%,transparent 76%,rgba(2,4,7,.20));
 }
 #real .photo-grade,#real .flight-film,#real .flight-vignette{z-index:3;pointer-events:none}
+/* A direct FormSubmit POST fallback appears only when AJAX cannot finish. */
+#contact .native-submit{width:100%;border:1px solid rgba(221,225,226,.45);background:rgba(240,240,240,.07);color:#e9e8e4;padding:17px 18px;text-align:center;font-family:var(--mono);font-size:11px;letter-spacing:.09em;transition:background .15s}
+#contact .native-submit:hover{background:rgba(240,240,240,.15)}
+#contact .native-submit[hidden]{display:none}
 /* The status cell never resizes or shifts the centered terminal title. */
 #analysis #runState[data-state="processing"]{color:#E9B75F;text-shadow:0 0 10px rgba(233,183,95,.22)}
 #analysis #runState[data-state="complete"]{color:#80CCA1;text-shadow:0 0 10px rgba(128,204,161,.24)}
@@ -267,12 +271,14 @@ body.on-contact .bottom-marker,body.on-contact .scroll-cue{opacity:0;pointer-eve
         <form class="contact-form" id="inquiryForm" method="POST" action="https://formsubmit.co/zheshen@ieee.org" accept-charset="UTF-8">
           <input type="hidden" name="_subject" value="[LETHAL CODE] New website inquiry"/>
           <input type="hidden" name="_template" value="table"/>
+          <input type="hidden" name="_url" value="https://lethalcode.org/"/>
           <div class="form-honeypot" aria-hidden="true"><label for="inquiryWebsite">Leave this field empty</label><input id="inquiryWebsite" type="text" name="_honey" tabindex="-1" autocomplete="off"/></div>
           <div class="fields"><div class="field"><label for="who">NAME / ORGANISATION</label><input id="who" name="name" maxlength="120" placeholder="Your name" required autocomplete="name"/></div><div class="field"><label for="reply">RETURN EMAIL</label><input id="reply" name="email" type="email" maxlength="180" placeholder="you@company.com" required autocomplete="email"/></div></div>
           <div class="field"><label for="subject">SUBJECT</label><input id="subject" name="subject" maxlength="150" placeholder="What would you like to discuss?" required/></div>
           <div class="field"><label for="message">MESSAGE</label><textarea id="message" name="message" maxlength="5000" placeholder="Describe the system, the question, or the opportunity…" required></textarea></div>
           <button class="send" id="inquirySend" type="submit"><span id="inquirySendLabel">SEND MESSAGE</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 12h15m-6-6 6 6-6 6"/></svg></button>
           <p id="inquiryStatus" class="inquiry-status" aria-live="polite" aria-atomic="true" role="status"></p>
+          <button id="inquiryNative" class="native-submit" type="button" hidden>CONTINUE VIA STANDARD FORM &nbsp; ↗</button>
           <p class="form-note">For general inquiries, leave a message or email us.<span class="sensitive-line"><strong>FOR SENSITIVE INQUIRIES</strong>, consider leaving a message on our onion site.</span></p>
         </form>
       </div>
@@ -488,6 +494,7 @@ const inquiryForm=$('#inquiryForm');
 const inquirySend=$('#inquirySend');
 const inquirySendLabel=$('#inquirySendLabel');
 const inquiryStatus=$('#inquiryStatus');
+const inquiryNative=$('#inquiryNative');
 let inquirySubmitting=false;
 function setInquiryStatus(text,type='info'){
   inquiryStatus.textContent=text;
@@ -495,6 +502,18 @@ function setInquiryStatus(text,type='info'){
   inquiryStatus.setAttribute('role',type==='error'?'alert':'status');
 }
 inquiryForm.addEventListener('input',()=>{if(inquiryStatus.textContent){setInquiryStatus('');inquirySendLabel.textContent='SEND MESSAGE';}});
+// Native HTML form POST does not depend on fetch, CORS, or browser extensions
+// allowing a cross-origin AJAX response. It navigates to FormSubmit, which
+// can show its own activation/confirmation page.
+inquiryNative.addEventListener('click',()=>{
+  if(!inquiryForm.reportValidity())return;
+  if(location.protocol==='file:'){
+    setInquiryStatus('THIS FORM MUST BE USED FROM THE LIVE HTTPS WEBSITE.','error');
+    return;
+  }
+  setInquiryStatus('OPENING FORM SERVICE — FOLLOW ITS CONFIRMATION INSTRUCTIONS.');
+  HTMLFormElement.prototype.submit.call(inquiryForm);
+});
 inquiryForm.addEventListener('submit',async e=>{
   e.preventDefault();
   if(inquirySubmitting || !inquiryForm.reportValidity())return;
@@ -509,13 +528,15 @@ inquiryForm.addEventListener('submit',async e=>{
     message:$('#message').value.trim(),
     _honey:$('#inquiryWebsite').value,
     _subject:'[LETHAL CODE] '+$('#subject').value.trim(),
-    _template:'table'
+    _template:'table',
+    _url:'https://lethalcode.org/'
   };
   if(!data.name || !data.email || !data.subject || !data.message){setInquiryStatus('PLEASE COMPLETE ALL FIELDS.','error');return;}
   inquirySubmitting=true;
   inquirySend.disabled=true;
   inquirySendLabel.textContent='SENDING…';
   setInquiryStatus('TRANSMITTING INQUIRY…');
+  inquiryNative.hidden=true;
   const controller=new AbortController();
   const timeout=setTimeout(()=>controller.abort(),18000);
   try{
@@ -531,7 +552,7 @@ inquiryForm.addEventListener('submit',async e=>{
     const delivered=response.ok && (result?.success===true || result?.success==='true');
     if(!delivered){
       const msg=String(result?.message||result?.error||'Submission not confirmed');
-      if(/activat|confirm/i.test(msg))throw new Error('CONTACT FORM NEEDS ONE-TIME EMAIL ACTIVATION. PLEASE USE DIRECT EMAIL FOR NOW.');
+      if(/activat|confirm/i.test(msg))throw new Error('ACTIVATION REQUIRED — CHECK ZHESHEN@IEEE.ORG AND SPAM, OR CONTINUE VIA STANDARD FORM BELOW.');
       throw new Error(msg);
     }
     inquiryForm.reset();
@@ -540,7 +561,12 @@ inquiryForm.addEventListener('submit',async e=>{
     notify('MESSAGE ACCEPTED');
   }catch(err){
     const msg=err?.name==='AbortError'?'REQUEST TIMED OUT — DELIVERY NOT CONFIRMED.':String(err?.message||'Unable to confirm delivery');
-    setInquiryStatus('NOT SENT / NOT CONFIRMED — '+msg+' YOU CAN USE DIRECT EMAIL INSTEAD.','error');
+    if(/ACTIVATION REQUIRED/.test(msg)){
+      setInquiryStatus(msg,'info');
+    }else{
+      setInquiryStatus('AJAX DELIVERY NOT CONFIRMED — '+msg+' USE STANDARD FORM BELOW TO CONTINUE.','error');
+    }
+    inquiryNative.hidden=false;
     inquirySendLabel.textContent='TRY AGAIN';
   }finally{
     clearTimeout(timeout);
